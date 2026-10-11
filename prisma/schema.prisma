@@ -1,0 +1,613 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------- Enums ----------
+
+enum Role {
+  ADMIN
+  USER
+}
+
+enum SupplierStatus {
+  ATIVO
+  POTENCIAL
+  INATIVO
+  NUNCA_CONTACTADO
+}
+
+enum RiskLevel {
+  ALTO
+  MEDIO
+  BAIXO
+}
+
+enum PresentationType {
+  BLISTER
+  FRASCO
+  INJETAVEL
+  SUSPENSAO
+  INDIVIDUAL
+}
+
+enum OrderStatus {
+  PEDIDO_RECEBIDO
+  EM_PROCUREMENT
+  COTACAO_ENVIADA
+  APROVADO
+  EM_TRANSITO
+  ENTREGUE
+  NAO_AVANCOU
+}
+
+enum NaoAvancouMotivo {
+  PRECO
+  PRAZO
+  CLIENTE_DESISTIU
+  PRODUTO_INDISPONIVEL
+  CONCORRENCIA
+  OUTRO
+}
+
+enum CommChannel {
+  EMAIL
+  WHATSAPP
+  CHAMADA
+  REUNIAO
+}
+
+enum DocStatus {
+  POR_CRIAR
+  CRIADO
+  ENVIADO
+  APROVADO
+}
+
+enum OrderType {
+  MEDICAMENTOS
+  MATERIAL_CIRURGICO
+  EQUIPAMENTO
+  OUTRO
+}
+
+enum Currency {
+  EUR
+  USD
+  AOA
+}
+
+// ---------- Auth / Audit ----------
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(USER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  auditEventsAsActor    AuditEvent[] @relation("AuditActor")
+  auditEventsOnBehalfOf AuditEvent[] @relation("AuditOnBehalf")
+
+  suppliersCreated  Supplier[] @relation("SupplierCreatedBy")
+  suppliersOnBehalf Supplier[] @relation("SupplierOnBehalfOf")
+
+  productsCreated Product[] @relation("ProductCreatedBy")
+
+  clientsCreated Client[] @relation("ClientCreatedBy")
+
+  ordersCreated  Order[] @relation("OrderCreatedBy")
+  ordersOnBehalf Order[] @relation("OrderOnBehalfOf")
+
+  statusChanges OrderStatusHistory[] @relation("StatusChangedBy")
+
+  notesCreated  OrderNote[] @relation("NoteCreatedBy")
+  notesOnBehalf OrderNote[] @relation("NoteOnBehalfOf")
+
+  comparisonsCreated  Comparison[] @relation("ComparisonCreatedBy")
+  comparisonsOnBehalf Comparison[] @relation("ComparisonOnBehalfOf")
+
+  quotesCreated  SupplierQuote[] @relation("QuoteCreatedBy")
+  quotesOnBehalf SupplierQuote[] @relation("QuoteOnBehalfOf")
+
+  evaluationsCreated SupplierEvaluation[] @relation("EvalCreatedBy")
+
+  attachmentsUploaded Attachment[] @relation("AttachmentUploadedBy")
+
+  importBatchesCreated ImportBatch[] @relation("ImportCreatedBy")
+
+  alertDismissals AlertDismissal[]
+}
+
+model AuditEvent {
+  id           String   @id @default(cuid())
+  entityType   String
+  entityId     String
+  action       String
+  actorId      String
+  actor        User     @relation("AuditActor", fields: [actorId], references: [id])
+  onBehalfOfId String?
+  onBehalfOf   User?    @relation("AuditOnBehalf", fields: [onBehalfOfId], references: [id])
+  changes      Json?
+  note         String?
+  createdAt    DateTime @default(now())
+
+  @@index([entityType, entityId])
+}
+
+// ---------- Categorias (partilhado produtos + fornecedores) ----------
+
+model Category {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  riskLevel RiskLevel @default(BAIXO)
+  createdAt DateTime  @default(now())
+
+  products    Product[]
+  suppliers   Supplier[]
+  marginRules MarginRule[]
+}
+
+// ---------- Fornecedores ----------
+
+model Supplier {
+  id              String         @id @default(cuid())
+  name            String
+  email           String?
+  whatsapp        String?
+  phone           String?
+  country         String?
+  status          SupplierStatus @default(NUNCA_CONTACTADO)
+  driveLink       String?
+  ratingAvg       Float?
+  ratingCount     Int            @default(0)
+  notes           String?
+  lastContactedAt DateTime?
+  createdById     String
+  createdBy       User           @relation("SupplierCreatedBy", fields: [createdById], references: [id])
+  onBehalfOfId    String?
+  onBehalfOf      User?          @relation("SupplierOnBehalfOf", fields: [onBehalfOfId], references: [id])
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  categories      Category[]
+  certifications  SupplierCertification[]
+  productCodes    SupplierProductCode[]
+  evaluations     SupplierEvaluation[]
+  quotes          SupplierQuote[]
+  comparisonCells ComparisonCell[]
+  priceHistory    PriceHistory[]
+  orderItems      OrderItem[]
+  attachments     Attachment[]
+}
+
+model Certification {
+  id   String @id @default(cuid())
+  name String @unique
+
+  suppliers SupplierCertification[]
+}
+
+model SupplierCertification {
+  id              String        @id @default(cuid())
+  supplierId      String
+  supplier        Supplier      @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  certificationId String
+  certification   Certification @relation(fields: [certificationId], references: [id])
+
+  @@unique([supplierId, certificationId])
+}
+
+model SupplierEvaluation {
+  id            String   @id @default(cuid())
+  supplierId    String
+  supplier      Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  orderId       String?
+  order         Order?   @relation(fields: [orderId], references: [id])
+  prazoCumprido Int
+  qualidade     Int
+  documentacao  Int
+  note          String?
+  createdById   String
+  createdBy     User     @relation("EvalCreatedBy", fields: [createdById], references: [id])
+  createdAt     DateTime @default(now())
+}
+
+// ---------- Catálogo de produtos ----------
+
+model Product {
+  id          String    @id @default(cuid())
+  name        String
+  genericName String?
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id])
+  description String?
+  imageUrl    String?
+  createdById String
+  createdBy   User      @relation("ProductCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  variants ProductVariant[]
+}
+
+model ProductVariant {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  name      String
+  sku       String?
+  createdAt DateTime @default(now())
+
+  presentations  Presentation[]
+  supplierCodes  SupplierProductCode[]
+  priceHistory   PriceHistory[]
+  comparisonRows ComparisonRow[]
+  orderItems     OrderItem[]
+  quoteLines     QuoteLine[]
+}
+
+model Presentation {
+  id            String           @id @default(cuid())
+  variantId     String
+  variant       ProductVariant   @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  type          PresentationType
+  dose          String?
+  qtyPerPackage Int              @default(1)
+  unitsPerBox   Int              @default(1)
+
+  orderItems OrderItem[]
+}
+
+model CommercialNameMapping {
+  id             String   @id @default(cuid())
+  commercialName String   @unique
+  genericName    String
+  createdAt      DateTime @default(now())
+}
+
+model SupplierProductCode {
+  id           String         @id @default(cuid())
+  supplierId   String
+  supplier     Supplier       @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  variantId    String
+  variant      ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  supplierCode String
+
+  @@unique([supplierId, variantId])
+}
+
+model PriceHistory {
+  id          String         @id @default(cuid())
+  variantId   String
+  variant     ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  supplierId  String
+  supplier    Supplier       @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  pricePerBox Float
+  currency    Currency       @default(EUR)
+  recordedAt  DateTime       @default(now())
+
+  @@index([variantId])
+}
+
+// ---------- Clientes ----------
+
+model Client {
+  id          String   @id @default(cuid())
+  name        String
+  email       String?
+  phone       String?
+  country     String?
+  driveLink   String?
+  createdById String
+  createdBy   User     @relation("ClientCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  orders      Order[]
+  attachments Attachment[]
+}
+
+// ---------- Encomendas ----------
+
+model Order {
+  id               String            @id @default(cuid())
+  reference        String            @unique
+  clientId         String
+  client           Client            @relation(fields: [clientId], references: [id])
+  status           OrderStatus       @default(PEDIDO_RECEBIDO)
+  orderType        OrderType         @default(OUTRO)
+  naoAvancouMotivo NaoAvancouMotivo?
+  driveLink        String?
+  createdById      String
+  createdBy        User              @relation("OrderCreatedBy", fields: [createdById], references: [id])
+  onBehalfOfId     String?
+  onBehalfOf       User?             @relation("OrderOnBehalfOf", fields: [onBehalfOfId], references: [id])
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  items         OrderItem[]
+  statusHistory OrderStatusHistory[]
+  notes         OrderNote[]
+  attachments   Attachment[]
+  documents     OrderDocument[]
+  comparisons   Comparison[]
+  quotes        SupplierQuote[]
+  evaluations   SupplierEvaluation[]
+  margin        OrderMargin?
+  shipment      Shipment?
+}
+
+model OrderStatusHistory {
+  id          String            @id @default(cuid())
+  orderId     String
+  order       Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  fromStatus  OrderStatus?
+  toStatus    OrderStatus
+  motivo      NaoAvancouMotivo?
+  changedById String
+  changedBy   User              @relation("StatusChangedBy", fields: [changedById], references: [id])
+  changedAt   DateTime          @default(now())
+}
+
+model OrderItem {
+  id              String          @id @default(cuid())
+  orderId         String
+  order           Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variantId       String?
+  variant         ProductVariant? @relation(fields: [variantId], references: [id])
+  freeTextProduct String?
+  presentationId  String?
+  presentation    Presentation?   @relation(fields: [presentationId], references: [id])
+  quantity        Int             @default(1)
+  supplierId      String?
+  supplier        Supplier?       @relation(fields: [supplierId], references: [id])
+  unitPrice       Float?
+  currency        Currency        @default(EUR)
+  createdAt       DateTime        @default(now())
+}
+
+model OrderNote {
+  id           String      @id @default(cuid())
+  orderId      String
+  order        Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  channel      CommChannel
+  content      String
+  createdById  String
+  createdBy    User        @relation("NoteCreatedBy", fields: [createdById], references: [id])
+  onBehalfOfId String?
+  onBehalfOf   User?       @relation("NoteOnBehalfOf", fields: [onBehalfOfId], references: [id])
+  createdAt    DateTime    @default(now())
+}
+
+model Attachment {
+  id           String    @id @default(cuid())
+  orderId      String?
+  order        Order?    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  supplierId   String?
+  supplier     Supplier? @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  clientId     String?
+  client       Client?   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  filename     String
+  storagePath  String
+  mimeType     String?
+  label        String?
+  uploadedById String
+  uploadedBy   User      @relation("AttachmentUploadedBy", fields: [uploadedById], references: [id])
+  createdAt    DateTime  @default(now())
+}
+
+// ---------- Picagem / Cotações (núcleo) ----------
+
+model Comparison {
+  id           String   @id @default(cuid())
+  label        String?
+  orderId      String?
+  order        Order?   @relation(fields: [orderId], references: [id])
+  status       String   @default("DRAFT")
+  createdById  String
+  createdBy    User     @relation("ComparisonCreatedBy", fields: [createdById], references: [id])
+  onBehalfOfId String?
+  onBehalfOf   User?    @relation("ComparisonOnBehalfOf", fields: [onBehalfOfId], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  rows ComparisonRow[]
+}
+
+model ComparisonRow {
+  id              String          @id @default(cuid())
+  comparisonId    String
+  comparison      Comparison      @relation(fields: [comparisonId], references: [id], onDelete: Cascade)
+  variantId       String?
+  variant         ProductVariant? @relation(fields: [variantId], references: [id])
+  freeTextProduct String?
+  position        Int             @default(0)
+
+  cells ComparisonCell[]
+}
+
+model ComparisonCell {
+  id                  String        @id @default(cuid())
+  rowId               String
+  row                 ComparisonRow @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  supplierId          String
+  supplier            Supplier      @relation(fields: [supplierId], references: [id])
+  pricePerBox         Float?
+  currency            Currency      @default(EUR)
+  unitsPerBoxOverride Int?
+  presentationNote    String?
+  quoteExpiresAt      DateTime?
+  isAwarded           Boolean       @default(false)
+  quoteLineId         String?
+  quoteLine           QuoteLine?    @relation(fields: [quoteLineId], references: [id])
+
+  @@unique([rowId, supplierId])
+}
+
+model SupplierQuote {
+  id           String   @id @default(cuid())
+  supplierId   String
+  supplier     Supplier @relation(fields: [supplierId], references: [id])
+  orderId      String?
+  order        Order?   @relation(fields: [orderId], references: [id])
+  comparisonId String?
+  createdById  String
+  createdBy    User     @relation("QuoteCreatedBy", fields: [createdById], references: [id])
+  onBehalfOfId String?
+  onBehalfOf   User?    @relation("QuoteOnBehalfOf", fields: [onBehalfOfId], references: [id])
+  createdAt    DateTime @default(now())
+
+  lines QuoteLine[]
+}
+
+model QuoteLine {
+  id                    String          @id @default(cuid())
+  quoteId               String
+  quote                 SupplierQuote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  variantId             String?
+  variant               ProductVariant? @relation(fields: [variantId], references: [id])
+  freeTextProduct       String?
+  price                 Float?
+  currency              Currency        @default(EUR)
+  prazoDias             Int?
+  marca                 String?
+  apresentacaoOferecida String?
+
+  comparisonCells ComparisonCell[]
+}
+
+// ---------- Margens / Financeiro ----------
+
+model MarginRule {
+  id         String    @id @default(cuid())
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id])
+  percentage Float
+  createdAt  DateTime  @default(now())
+}
+
+model OrderMargin {
+  id                String   @id @default(cuid())
+  orderId           String   @unique
+  order             Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customPercentage  Float?
+  manualClientPrice Float?
+  viewMode          String   @default("SIMPLES")
+  updatedAt         DateTime @updatedAt
+}
+
+model FixedCost {
+  id            String   @id @default(cuid())
+  name          String
+  monthlyAmount Float
+  currency      Currency @default(EUR)
+  createdAt     DateTime @default(now())
+}
+
+model ExchangeRate {
+  id           String   @id @default(cuid())
+  fromCurrency Currency
+  toCurrency   Currency
+  rate         Float
+  updatedAt    DateTime @updatedAt
+
+  @@unique([fromCurrency, toCurrency])
+}
+
+// ---------- Logística ----------
+
+model Forwarder {
+  id        String   @id @default(cuid())
+  name      String
+  contact   String?
+  createdAt DateTime @default(now())
+
+  shipments Shipment[]
+}
+
+model Shipment {
+  id            String     @id @default(cuid())
+  orderId       String     @unique
+  order         Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  forwarderId   String?
+  forwarder     Forwarder? @relation(fields: [forwarderId], references: [id])
+  freightCost   Float?
+  currency      Currency   @default(EUR)
+  departureEst  DateTime?
+  arrivalEst    DateTime?
+  departureReal DateTime?
+  arrivalReal   DateTime?
+  finalCost     Float?
+  realMargin    Float?
+  updatedAt     DateTime   @updatedAt
+}
+
+// ---------- Documentos ----------
+
+model DocumentChecklistTemplate {
+  id        String    @id @default(cuid())
+  orderType OrderType @unique
+  items     Json
+  updatedAt DateTime  @updatedAt
+}
+
+model OrderDocument {
+  id        String    @id @default(cuid())
+  orderId   String
+  order     Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  name      String
+  status    DocStatus @default(POR_CRIAR)
+  updatedAt DateTime  @updatedAt
+}
+
+model FaqArticle {
+  id                String        @id @default(cuid())
+  title             String
+  content           String
+  appliesToStatuses OrderStatus[]
+  updatedAt         DateTime      @updatedAt
+}
+
+// ---------- Alertas ----------
+
+model SystemSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model AlertDismissal {
+  id           String    @id @default(cuid())
+  type         String
+  entityType   String?
+  entityId     String?
+  userId       String
+  user         User      @relation(fields: [userId], references: [id])
+  dismissedAt  DateTime  @default(now())
+  snoozedUntil DateTime?
+  ignoredCount Int       @default(1)
+
+  @@unique([type, entityType, entityId, userId])
+}
+
+// ---------- Import PHC ----------
+
+model ImportBatch {
+  id          String   @id @default(cuid())
+  type        String
+  filename    String
+  rowCount    Int      @default(0)
+  status      String   @default("PENDENTE")
+  errorLog    String?
+  createdById String
+  createdBy   User     @relation("ImportCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+}
