@@ -36,11 +36,9 @@ Next.js · TypeScript · Tailwind CSS · shadcn/ui · Prisma ORM · PostgreSQL �
 | 🟪 | `CLAUDE.md`, `AGENTS.md`, `.claude/` | Instructions for AI coding agents |
 | ⬜ | `public/` and root files | Assets, Next.js, Tailwind and TypeScript configuration |
 
-<!-- Demo: add your screenshots to docs/screenshots/ and uncomment.
 ## Demo
-![Home](docs/screenshots/home.png)
-[Watch the video](https://youtu.be/...)
--->
+
+[Watch the 1-minute demo video](https://youtu.be/ZPbbPYo_iqo)
 
 ## Run locally
 
